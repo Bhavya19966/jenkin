@@ -34,7 +34,7 @@ pipeline {
                         script {
                         git branch: "5.0.1",
                         credentialsId: "github_cred",
-                        url: "http://slb-wgithub-v.stg.rmn.local/rakuten-innoeye/watchmen.git"
+                        url: "<git_repo>"
                         sh '''
                         cd ui-watchman
                         ls -ltrh'''
@@ -179,7 +179,7 @@ pipeline {
                 echo "Helm chart checkout"  
                 git branch: "5.0.1",
                 credentialsId: "github_cred",
-                url: "http://slb-wgithub-v.stg.rmn.local/rakuten-innoeye/watchmen.git"
+                url: "<git_repo>"
                 sh 'echo "listing Current Directory" && ls -ltrh && pwd' 
                 sh '''
                 robin client add-context ${clusterip} --port 29465 --event-port 29465 --file-port 29465 --set-current
