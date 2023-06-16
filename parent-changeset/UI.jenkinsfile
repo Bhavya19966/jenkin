@@ -1,0 +1,197 @@
+pipeline {
+    agent none
+    stages {
+        stage("Continuous Integration") {
+            agent {
+                docker {
+                    // image 'kldev-docker.slb-wartifactory-v.stg.rmn.local/innoeye/oss/node14.15-jenkins:latest'
+                    // image 'kldev-docker.slb-wartifactory-v.stg.rmn.local/innoeye/oss/node14-jenkins:latest'
+                    image 'public-docker.slb-wartifactory-v.stg.rmn.local/node:14.20.1'
+                    //args '-v $HOME/.m2:/root/.m2 -v /var/run/docker.sock:/var/run/docker.sock'
+                    //label 'wjenkins-agent101zc-shared-6 || wjenkins-agent101zc-shared-5|| wjenkins-agent101zc-shared-4 || wjenkins-agent101zc-shared-3 || wjenkins-agent101zc-shared-2 || wjenkins-agent101zc-shared-1'
+                    //label 'wjenkins-agent102zc-shared-3 || wjenkins-agent102zc-shared-2|| wjenkins-agent103zc-shared-1 || wjenkins-agent101zc-shared-3 || wjenkins-agent101zc-shared-2 || wjenkins-agent101zc-shared-1'
+                    registryUrl 'https://public-docker.slb-wartifactory-v.stg.rmn.local'
+                    registryCredentialsId 'artifactory_cred'
+                    
+                }
+            }
+            environment {
+                ARTIFACTORY_CRED = credentials('artifactory_cred')
+                USERNAME = "${ARTIFACTORY_CRED_USR}"
+                PASSWORD = "${ARTIFACTORY_CRED_PSW}"
+                appname = 'watchman'
+                baseHref = '/rcp/' 
+                appTarName = 'watchtowerappui'
+                UI_PATH = 'ui-watchman'
+                dockerRepoName= 'kldev-docker.slb-wartifactory-v.stg.rmn.local'
+                version = sh(script: 'date "+%Y.%m.$BUILD_ID-SNAPSHOT"', returnStdout: true).trim() 
+            }            
+
+            stages {
+               stage('SCM-Checkout') {
+                    steps {
+                        step([$class: 'WsCleanup']) 
+                        script {
+                        git branch: "5.0.1",
+                        credentialsId: "github_cred",
+                        url: "http://slb-wgithub-v.stg.rmn.local/rakuten-innoeye/watchmen.git"
+                        sh '''
+                        cd ui-watchman
+                        ls -ltrh'''
+                        }
+                    }
+                }
+                stage ('Code Compile') {
+                    steps {
+                        dir('ui-watchman/'){
+                            echo "npm install and Build Creation"
+                            script {
+                                sh '''
+                                #!/bin/bash
+                                npm config set https-proxy http://[240b:c0e0:101:5476:1c01:2:0:a]:3128
+                                npm config set http-proxy http://[240b:c0e0:101:5476:1c01:2:0:a]:3128
+                                npm set noproxy slb-wartifactory-v.stg.rmn.local
+                                npm set strict-ssl false
+                                npm set registry "https://slb-wartifactory-v.stg.rmn.local/artifactory/api/npm/public-npm/"
+                                ls -ltrha
+                                pwd
+                                sed -i s/proxy/#proxy/g .npmrc
+                                rm -rf package-lock.json
+                                ls -ltrh
+                                pwd
+                                npm i --no-progress
+                                mv micro-app-angular.json angular.json
+                                ls -ltrh *.json
+                                sed -i s,--max_old_space_size=4048,--max_old_space_size=8096,g package.json
+                                APP=${appname} BASE_HREF=${baseHref} npm run micro-app --verbose
+                                cd dist/apps
+                                ls -ltrh
+                                APP_DIR=$WORKSPACE/$UI_PATH/dist/apps/$appname
+                                echo "appDir is $APP_DIR"
+                                if [ -d "$APP_DIR" ]; then
+                                cd $WORKSPACE/$UI_PATH/dist/apps/
+                                ls -ltrh
+                                echo "appname is $appname and tar name is $appTarName"
+                                tar czf ${appTarName}.tar $appname
+                                ls -ltrh 
+                                else
+                                echo "$APP_DIR doesnt exist"
+                                exit 1
+                                fi
+                                '''
+                                // stash(name: 'executable')
+                            }
+                        }
+                        dir('ui-watchman/dist'){
+                            stash includes: 'apps/', name: 'distapps'
+                        }
+                        dir('ui-watchman/Jenkins'){
+                            stash includes: 'Dockerfile', name: 'dockerfile'
+                        }
+                    }
+                }              
+            }
+        }
+        stage("Sonar Scan"){
+            agent {
+                docker {
+                    image 'sonarsource/sonar-scanner-cli'
+                }
+            }
+            environment {
+                MVN_HOME = tool name: 'Default', type: 'maven'
+                TAG = sh(script: 'date "+%Y.%m.$BUILD_ID-SNAPSHOT"', returnStdout: true).trim()
+            }            
+            steps{
+                dir('ui-watchman'){
+                withSonarQubeEnv('sonarqube_katana') {
+                    sh "sonar-scanner -Dsonar.sources=. -Dsonar.projectKey=watchtower-ui -Dsonar.projectVersion=0.0.2 -Dsonar.host.url=http://wsonarqube101zc.stg.rmn.local:9000 -Dsonar.login=d7ec317f40d7d6da27cb8035aa9073c34d4e795e -Dhttp.proxyHost=[240b:c0e0:101:5476:1c01:2::a] -Dhttp.proxyPort=3128 -Dhttps.proxyHost=[240b:c0e0:101:5476:1c01:2::a] -Dhttps.proxyPort=3128"
+                    }
+                }   
+            }
+        }	
+	
+        stage ('Docker Image Build and Push') {
+            agent {
+                docker {
+                    // image 'kldev-docker.slb-wartifactory-v.stg.rmn.local/innoeye/oss/node14.15-jenkins:latest'
+                    // image 'kldev-docker.slb-wartifactory-v.stg.rmn.local/innoeye/oss/node14-jenkins:latest'
+                    image 'public-docker.slb-wartifactory-v.stg.rmn.local/node:14.20.1'
+                    //args '-v $HOME/.m2:/root/.m2 -v /var/run/docker.sock:/var/run/docker.sock'
+                    //label 'wjenkins-agent101zc-shared-6 || wjenkins-agent101zc-shared-5|| wjenkins-agent101zc-shared-4 || wjenkins-agent101zc-shared-3 || wjenkins-agent101zc-shared-2 || wjenkins-agent101zc-shared-1'
+                    //label 'wjenkins-agent102zc-shared-3 || wjenkins-agent102zc-shared-2|| wjenkins-agent103zc-shared-1 || wjenkins-agent101zc-shared-3 || wjenkins-agent101zc-shared-2 || wjenkins-agent101zc-shared-1'
+                    registryUrl 'https://public-docker.slb-wartifactory-v.stg.rmn.local'
+                    registryCredentialsId 'artifactory_cred'
+                    
+                }
+            }
+            environment {
+                dockerRepoName= 'kldev-docker.slb-wartifactory-v.stg.rmn.local'
+                version = sh(script: 'date "+%Y.%m.$BUILD_ID-SNAPSHOT"', returnStdout: true).trim()  
+                appTarName = 'watchtowerappui'
+            }             
+            steps{
+                script {
+                    withCredentials([usernamePassword(credentialsId: 'artifactory_cred', passwordVariable: 'PASSWD', usernameVariable: 'USERNAME')]){  
+                    unstash 'distapps'
+                    unstash 'dockerfile'
+                    
+                    sh '''
+                    pwd
+                    ls -ltrh
+                    cat ui-watchman/Jenkins/Dockerfile
+                    cp ui-watchman/Jenkins/Dockerfile ui-watchman/dist/apps
+                    cd ui-watchman/dist/apps
+                    echo "image version is $version"
+                    echo "repo name is $dockerRepoName"
+                    echo "user "${USERNAME}" & password "${PASSWD}" "
+                    docker login --username "${USERNAME}" --password "${PASSWD}" "${dockerRepoName}"
+                    docker build . -t $dockerRepoName/rakuten/oss/watchtower/cicd/watchtowerui:$version --build-arg APP_NAME=${appTarName}
+                    docker push $dockerRepoName/rakuten/oss/watchtower/cicd/watchtowerui:$version
+                    docker logout $dockerRepoName
+                    '''
+                    }
+                }
+                print "Image name is : "+dockerRepoName+"/rakuten/oss/watchtower/cicd/watchtowerui:"+version
+            }
+        }
+
+        stage("Continuous Deployment") {
+            agent {
+                docker {
+                image 'kldev-docker.slb-wartifactory-v.stg.rmn.local/innoeye/oss/robin:1.0.1'
+                registryUrl 'https://kldev-docker.slb-wartifactory-v.stg.rmn.local'
+                registryCredentialsId 'artifactory_cred'
+                }
+            }
+            environment {
+                ARTIFACTORY_CRED = credentials('artifactory_cred')
+                USERNAME = "${ARTIFACTORY_CRED_USR}"
+                PASSWORD = "${ARTIFACTORY_CRED_PSW}"
+                clusterip = "240b:c0e0:104:5400:b432:2::"
+                dockerRepoName= 'kldev-docker.slb-wartifactory-v.stg.rmn.local'
+                IMAGE_TAG = sh(script: 'date "+%Y.%m.$BUILD_ID-SNAPSHOT"', returnStdout: true).trim()
+            }		
+            steps{                
+            script{
+                withCredentials([usernamePassword(credentialsId: 'robin', passwordVariable: 'ROBIN_PASS', usernameVariable: 'ROBIN_USER')])
+                {
+                echo "Helm chart checkout"  
+                git branch: "5.0.1",
+                credentialsId: "github_cred",
+                url: "http://slb-wgithub-v.stg.rmn.local/rakuten-innoeye/watchmen.git"
+                sh 'echo "listing Current Directory" && ls -ltrh && pwd' 
+                sh '''
+                robin client add-context ${clusterip} --port 29465 --event-port 29465 --file-port 29465 --set-current
+                robin login ${ROBIN_USER} --password ${ROBIN_PASS}
+                robin k8s get-kube-config --save-as-file --dest-dir ~/.kube
+                robin whoami
+                helm ls -n ns-rcp-ros | grep watch
+                helm upgrade --install watchtowerappui ./watchmanUI-helm -n ns-rcp-ros --set image.tag="${IMAGE_TAG}" --set image.repository="${dockerRepoName}"/rakuten/oss/watchtower/cicd/watchtowerui --insecure-skip-tls-verify
+                '''
+                }
+            }
+            }
+        }
+    }
+}
